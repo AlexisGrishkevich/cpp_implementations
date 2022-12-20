@@ -1,0 +1,3 @@
+[submodule "Any/googletest"]
+	path = Any/googletest
+	url = git@github.com:google/googletest.git
