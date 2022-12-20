@@ -188,7 +188,7 @@ struct VariantAlternative {
 
   VariantAlternative(T&& value) {
     auto ptr = cast_to_derived();
-    ptr-> template safe_put<kIndex>(value);
+    ptr-> template safe_put<kIndex>(std::move(value));
   }
 
   ~VariantAlternative() { }
@@ -220,15 +220,15 @@ struct VariantAlternative {
   VariantAlternative(const Derived& rhs) {
     if (rhs.current_index_ != kIndex)
       return;
- 
+
     auto ptr = cast_to_derived();
     ptr->template safe_put<kIndex>(get<kIndex>(rhs));
   }
- 
+
   VariantAlternative(Derived&& rhs) {
     if (rhs.current_index_ != kIndex)
       return;
- 
+
     auto ptr = cast_to_derived();
     ptr->template safe_put<kIndex>(std::move(get<kIndex>(std::move(rhs))));
   }
@@ -300,10 +300,6 @@ public:
   using VariantStorage<Types...>::current_index_;
   using VariantAlternative<Types, Types...>::VariantAlternative...;
   using VariantAlternative<Types, Types...>::operator=...;
-
-private:
-  //details::VariadicUnion<Types...> storage_;
-  //std::size_t current_index_;
 
 private:
   constexpr void destroy_all();
