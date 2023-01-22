@@ -3,12 +3,14 @@
 #define LIST_H_
 
 #include <cstdlib>
-#include <initializer_list>
 #include <exception>
+#include <initializer_list>
 #include <iterator>
 #include <type_traits>
 #include <utility>
 
+
+#include <iostream>
 
 template <typename T, typename Allocator = std::allocator<T>>
 class List final {
@@ -90,7 +92,6 @@ private:
   Node* create_node(Args&&... args);
   void destroy_node(Node* node) noexcept;
   void default_initialize();
-  void check_equal_allocators(const List& rhs); 
   void increment_size(std::size_t count = 1) noexcept;
   void decrement_size(std::size_t count = 1) noexcept;
   void set_size(std::size_t count) noexcept;
@@ -143,15 +144,15 @@ public:
   iterator erase(const_iterator pos);
 
   void clear();
-  template <typename U>
-  iterator insert(const_iterator pos, U&& value);
-  template <typename U>
-  void push_back(U&& value);
+  iterator insert(const_iterator pos, const T& value);
+  iterator insert(const_iterator pos, T&& value);
+  void push_back(const T& value);
+  void push_back(T&& value);
   template <typename... Args>
   reference emplace_back(Args&&... args);
   void pop_back();
-  template <typename U>
-  void push_front(U&& value);
+  void push_front(const T& value);
+  void push_front(T&& value);
   template <typename... Args>
   reference emplace_front(Args&&... args);
   void pop_front();
@@ -210,16 +211,14 @@ CommonIterator(BaseNode* node) : node_{node}
 template <typename T, typename Allocator>
 template <bool IsConst>
 List<T, Allocator>::CommonIterator<IsConst>::
-CommonIterator(const typename List<T, Allocator>::
-template CommonIterator<IsConst>& rhs) : node_{rhs.node_}
+CommonIterator(const CommonIterator<IsConst>& rhs) : node_{rhs.node_}
 { }
 
 template <typename T, typename Allocator>
 template <bool IsConst>
 typename List<T, Allocator>::template CommonIterator<IsConst>&
 List<T, Allocator>::CommonIterator<IsConst>::
-operator=(const typename List<T, Allocator>::
-                template CommonIterator<IsConst>& rhs) {
+operator=(const CommonIterator<IsConst>& rhs) {
   node_ = rhs.node_;
   return *this;
 }
@@ -332,12 +331,6 @@ void List<T, Allocator>::default_initialize() {
 }
 
 template <typename T, typename Allocator>
-void List<T, Allocator>::check_equal_allocators(const List& rhs) {
-  if (alloc_ != rhs.alloc_)
-    abort(); 
-}
-
-template <typename T, typename Allocator>
 void List<T, Allocator>::increment_size(std::size_t count) noexcept {
   size_ += count;
 }
@@ -355,7 +348,7 @@ void List<T, Allocator>::set_size(std::size_t count) noexcept {
 template <typename T, typename Allocator>
 void List<T, Allocator>::check_container_is_empty() {
   if (empty())
-    throw std::runtime_error("Invalid operation (List is empty).");
+    throw std::runtime_error{"Invalid operation (List is empty)."};
 }
 
 template <typename T, typename Allocator>
@@ -391,7 +384,7 @@ List<T, Allocator>::List(const List& rhs)
 }
 
 template <typename T, typename Allocator>
-List<T, Allocator>::List(List&& rhs) 
+List<T, Allocator>::List(List&& rhs)
     : fake_node_(rhs.fake_node_), size_(rhs.size_),
       alloc_(std::move(rhs.alloc_)) {
   rhs.default_initialize();
@@ -402,12 +395,16 @@ List<T, Allocator>& List<T, Allocator>::operator=(const List& rhs) {
   if (this == &rhs)
     return *this;
 
-  if (NodeAllocTraits::propagate_on_container_copy_assignment::value &&
-      alloc_ != rhs.alloc_) {
-    alloc_ = rhs.alloc_;
+  if (NodeAllocTraits::propagate_on_container_copy_assignment::value) {
+    List tmp(rhs);
+    swap(tmp);
+  } else if (NodeAllocTraits::is_always_equal::value || alloc_ == rhs.alloc_) {
+    List tmp(rhs);
+    swap(tmp);
+  } else {
+    assign(rhs.begin(), rhs.end());
   }
 
-  assign(rhs.begin(), rhs.end());
   return *this;
 }
 
@@ -416,17 +413,23 @@ List<T, Allocator>& List<T, Allocator>::operator=(List&& rhs) {
   if (this == &rhs)
     return *this;
 
-  clear();
-  NodeAllocTraits::deallocate(alloc_, static_cast<Node*>(fake_node_), 1);
-
-  if (NodeAllocTraits::propagate_on_container_move_assignment::value &&
-      alloc_ != rhs.alloc_) {
+  if (NodeAllocTraits::propagate_on_container_move_assignment::value) {
+    clear();
+    NodeAllocTraits::deallocate(alloc_, static_cast<Node*>(fake_node_), 1);
     alloc_ = std::move(rhs.alloc_);
+    fake_node_ = std::exchange(rhs.fake_node_, nullptr);
+    size_ = std::exchange(rhs.size_, 0);
+    rhs.default_initialize();
+  } else if (NodeAllocTraits::is_always_equal::value || alloc_ == rhs.alloc_) {
+    clear();
+    NodeAllocTraits::deallocate(alloc_, static_cast<Node*>(fake_node_), 1);
+    fake_node_ = std::exchange(rhs.fake_node_, nullptr);
+    size_ = std::exchange(rhs.size_, 0);
+    rhs.default_initialize();
+  } else {
+    assign(std::make_move_iterator(rhs.begin()), std::make_move_iterator(rhs.end()));
   }
 
-  fake_node_ = rhs.fake_node_;
-  size_ = rhs.size_;
-  rhs.default_initialize();
   return *this;
 }
 
@@ -446,6 +449,7 @@ List<T, Allocator>::~List() {
 template <typename T, typename Allocator>
 template <typename InputIt>
 void List<T, Allocator>::assign(InputIt first, InputIt last) {
+  clear();
   for (; first != last; ++first)
     emplace_back(*first);
 }
@@ -602,16 +606,25 @@ void List<T, Allocator>::clear() {
 }
 
 template <typename T, typename Allocator>
-template <typename U>
 typename List<T, Allocator>::iterator
-List<T, Allocator>::insert(const_iterator pos, U&& value) {
+List<T, Allocator>::insert(const_iterator pos, const T& value) {
   return emplace(pos, value);
 }
 
 template <typename T, typename Allocator>
-template <typename U>
-void List<T, Allocator>::push_back(U&& value) {
+typename List<T, Allocator>::iterator
+List<T, Allocator>::insert(const_iterator pos, T&& value) {
+  return emplace(pos, std::move(value));
+}
+
+template <typename T, typename Allocator>
+void List<T, Allocator>::push_back(const T& value) {
   insert(end(), value);
+}
+
+template <typename T, typename Allocator>
+void List<T, Allocator>::push_back(T&& value) {
+  insert(end(), std::move(value));
 }
 
 template <typename T, typename Allocator>
@@ -628,9 +641,13 @@ void List<T, Allocator>::pop_back() {
 }
 
 template <typename T, typename Allocator>
-template <typename U>
-void List<T, Allocator>::push_front(U&& value) {
+void List<T, Allocator>::push_front(const T& value) {
   insert(begin(), value);
+}
+
+template <typename T, typename Allocator>
+void List<T, Allocator>::push_front(T&& value) {
+  insert(begin(), std::move(value));
 }
 
 template <typename T, typename Allocator>
@@ -657,15 +674,21 @@ void List<T, Allocator>::resize(std::size_t new_size, const T& value) {
 
 template <typename T, typename Allocator>
 void List<T, Allocator>::splice(const_iterator pos, List&& rhs) {
+  if (alloc_ == rhs.alloc_) {
+    rhs.fake_node_->next_->prev_ = pos.node_->prev_;
+    pos.node_->prev_->next_ = rhs.fake_node_->next_;
+    rhs.fake_node_->prev_->next_ = pos.node_;
+    pos.node_->prev_ = rhs.fake_node_->prev_;
+    increment_size(rhs.size_);
+    rhs.fake_node_->make_loop();
+    rhs.set_size(0);
+  } else {
+    for (auto&& item : rhs) {
+      push_back(item);
+    }
 
-  check_equal_allocators(rhs);
-  rhs.fake_node_->next_->prev_ = pos.node_->prev_;
-  pos.node_->prev_->next_ = rhs.fake_node_->next_;
-  rhs.fake_node_->prev_->next_ = pos.node_;
-  pos.node_->prev_ = rhs.fake_node_->prev_;
-  increment_size(rhs.size_);
-
-  rhs.default_initialize();
+    rhs.clear();
+  }
 }
 
 template <typename T, typename Allocator>
